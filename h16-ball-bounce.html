@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>FNBS Members Map</title>
+  <style>
+    #map { height: 90vh; width: 100%; }
+
+    /* Multi-bounce animation */
+    @keyframes multiBounce {
+      0%   { transform: translateY(0); }
+      20%  { transform: translateY(-30px); }
+      40%  { transform: translateY(0); }
+      55%  { transform: translateY(-15px); }
+      70%  { transform: translateY(0); }
+      80%  { transform: translateY(-7px); }
+      90%  { transform: translateY(0); }
+      100% { transform: translateY(0); }
+    }
+
+    .bounce-multi {
+      animation: multiBounce 1.5s ease forwards;
+    }
+  </style>
+
+  <script>
+    const locations = JSON.parse('<?= data ?>');
+    const apiKey = '<?= apiKey ?>';
+
+    let map;
+    let sharedInfoWindow;
+
+    function initMap() {
+      const groupStyles = {
+        "Group-Le": {
+          color: "red",
+          path: google.maps.SymbolPath.CIRCLE
+        },
+        "Group-Amy": {
+          color: "orange",
+          path: "M -8 8 L 8 8 L 8 -8 L -8 -8 Z"
+        },
+        "Group-Cyrus": {
+          color: "blue",
+          path: "M 0 -10 L 10 8 L -10 8 Z"
+        }
+      };
+
+      map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 13,
+        center: { lat: 32.7157, lng: -117.1611 }
+      });
+
+      sharedInfoWindow = new google.maps.InfoWindow();
+      const bounds = new google.maps.LatLngBounds();
+
+      locations.forEach(loc => {
+        const position = new google.maps.LatLng(parseFloat(loc.lat), parseFloat(loc.lng));
+        const style = groupStyles[loc.group] || {
+          color: "gray",
+          path: google.maps.SymbolPath.CIRCLE
+        };
+
+        // Invisible marker to handle clicks
+        const marker = new google.maps.Marker({
+          position,
+          map,
+          title: loc.name,
+          icon: {
+            path: style.path,
+            scale: 10,
+            fillColor: style.color,
+            fillOpacity: 0,
+            strokeWeight: 0
+          }
+        });
+
+        marker.addListener('click', () => {
+          sharedInfoWindow.setContent(
+            `<strong>${escapeHtml(loc.name)}</strong><br>` +
+            `${escapeHtml(loc.address)}<br>` +
+            `<em>${escapeHtml(loc.group)}</em>`
+          );
+          sharedInfoWindow.setPosition(position);
+          sharedInfoWindow.open(map);
+        });
+
+        // Overlay for shape with multi bounce animation
+        const overlay = new google.maps.OverlayView();
+        overlay.onAdd = function () {
+          const div = document.createElement("div");
+          div.style.position = "absolute";
+          div.style.width = "24px";
+          div.style.height = "24px";
+          div.style.pointerEvents = "none"; // let clicks pass to marker
+          div.classList.add("bounce-multi");
+
+          div.innerHTML = `
+            <svg viewBox="-12 -12 24 24" width="24" height="24">
+              ${
+                style.path === google.maps.SymbolPath.CIRCLE
+                  ? `<circle cx="0" cy="0" r="8" fill="${style.color}" stroke="#333" stroke-width="2"/>`
+                  : `<path d="${style.path}" fill="${style.color}" stroke="#333" stroke-width="2"/>`
+              }
+            </svg>
+          `;
+
+          this.div = div;
+          this.getPanes().overlayMouseTarget.appendChild(div);
+        };
+
+        overlay.draw = function () {
+          const projection = this.getProjection();
+          const point = projection.fromLatLngToDivPixel(position);
+          if (point && this.div) {
+            this.div.style.left = (point.x - 12) + "px";
+            this.div.style.top = (point.y - 12) + "px";
+          }
+        };
+
+        overlay.onRemove = function () {
+          if (this.div) this.div.remove();
+        };
+
+        overlay.setMap(map);
+        bounds.extend(position);
+      });
+
+      if (locations.length > 0) {
+        map.fitBounds(bounds);
+      }
+
+      addLegend(map);
+    }
+
+    function addLegend(map) {
+      const legend = document.createElement("div");
+      legend.style.background = "#fff";
+      legend.style.padding = "10px";
+      legend.style.margin = "10px";
+      legend.style.border = "1px solid #ccc";
+      legend.style.borderRadius = "8px";
+      legend.style.fontSize = "14px";
+      legend.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
+      legend.innerHTML = "<strong>Legend</strong><br>";
+
+      legend.innerHTML += `
+        <div style="margin: 4px 0;">
+          <svg width="20" height="20" viewBox="-10 -10 20 20">
+            <circle cx="0" cy="0" r="8" fill="red" stroke="#333" stroke-width="2"/>
+          </svg> Group-Le
+        </div>
+        <div style="margin: 4px 0;">
+          <svg width="20" height="20" viewBox="-10 -10 20 20">
+            <rect x="-8" y="-8" width="16" height="16" fill="orange" stroke="#333" stroke-width="2"/>
+          </svg> Group-Amy
+        </div>
+        <div style="margin: 4px 0;">
+          <svg width="20" height="20" viewBox="-10 -10 20 20">
+            <polygon points="0,-10 10,8 -10,8" fill="blue" stroke="#333" stroke-width="2"/>
+          </svg> Group-Cyrus
+        </div>
+      `;
+
+      map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+    }
+  </script>
+
+  <script
+    src="https://maps.googleapis.com/maps/api/js?key=<?= apiKey ?>&callback=initMap"
+    async
+    defer
+  ></script>
+</head>
+<body>
+  <h2>FNBS Members Map</h2>
+  <div id="map"></div>
+</body>
+</html>

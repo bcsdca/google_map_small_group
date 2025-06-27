@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>FNBS Small Groups Map</title>
+  <style>
+    #map {
+      height: 90vh;
+      width: 100%;
+    }
+
+    .info-box {
+      position: absolute;
+      background: #fff;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      font-size: 12px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 999;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .info-box.visible {
+      opacity: 1;
+    }
+
+    .gm-ui-hover-effect {
+      display: none !important;
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.9); opacity: 1; }
+      70% { transform: scale(1.5); opacity: 0; }
+      100% { transform: scale(0.9); opacity: 0; }
+    }
+
+    .pulse-ring {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border: 2px solid;
+      border-radius: 50%;
+      background: transparent;
+      animation: pulse-ring 1.5s infinite;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: bold;
+      color: white;
+      text-shadow: 0 0 2px #000;
+    }
+  </style>
+</head>
+<body>
+  <h2>FNBS Small Groups Map</h2>
+  <div id="map"></div>
+
+  <script>
+    const locations = JSON.parse('<?= data ?>');
+    const apiKey = '<?= apiKey ?>';
+
+    const groupStyles = {
+      "Group-NorthCounty": { color: "red" },
+      "Group-ChulaVista": { color: "orange" },
+      "Group-ScriptsRanch": { color: "blue" }
+    };
+
+    let map, overlayView, infoBox;
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 13,
+        center: { lat: 32.7157, lng: -117.1611 }
+      });
+
+      infoBox = createInfoBox();
+
+      overlayView = new google.maps.OverlayView();
+      overlayView.onAdd = () => {};
+      overlayView.draw = () => {};
+      overlayView.setMap(map);
+
+      const bounds = new google.maps.LatLngBounds();
+      locations.forEach(loc => {
+        bounds.extend(new google.maps.LatLng(loc.lat, loc.lng));
+      });
+      map.fitBounds(bounds);
+
+      const groups = {};
+      locations.forEach(loc => {
+        if (!groups[loc.group]) groups[loc.group] = [];
+        groups[loc.group].push(loc);
+      });
+
+      // Draw convex hull shapes
+      Object.entries(groups).forEach(([groupName, members]) => {
+        const points = members.map(m => new google.maps.LatLng(m.lat, m.lng));
+        const shape = new google.maps.Polygon({
+          paths: convexHull(points),
+          strokeColor: "rgba(0, 0, 0, 0.6)",         // dark gray stroke
+          strokeOpacity: 0.9,
+          strokeWeight: 4,
+          fillColor: groupStyles[groupName].color,  // keep group color
+          fillOpacity: 0.35,
+          map
+        });
+      });
+
+      // Add markers
+      let hasDropped = false;
+      google.maps.event.addListenerOnce(map, 'idle', () => {
+        if (hasDropped) return;
+        hasDropped = true;
+
+        locations.forEach((loc, index) => {
+          const position = new google.maps.LatLng(loc.lat, loc.lng);
+          const color = groupStyles[loc.group]?.color || "gray";
+
+          const marker = new google.maps.Marker({
+            position,
+            map,
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 10,
+              fillColor: color,
+              fillOpacity: 1,
+              strokeColor: "#333",
+              strokeWeight: 2
+            },
+            animation: google.maps.Animation.DROP
+          });
+
+          if (loc.host) {
+            const div = document.createElement("div");
+            div.className = `pulse-ring`;
+            div.style.borderColor = color;
+            div.innerText = "HOST";
+
+            const customOverlay = new google.maps.OverlayView();
+            customOverlay.onAdd = function () {
+              const panes = this.getPanes();
+              panes.overlayMouseTarget.appendChild(div);
+            };
+            customOverlay.draw = function () {
+              const projection = this.getProjection();
+              if (!projection) return;
+              const point = projection.fromLatLngToDivPixel(position);
+              div.style.left = (point.x - 10) + "px";
+              div.style.top = (point.y - 10) + "px";
+            };
+            customOverlay.setMap(map);
+          }
+
+          marker.addListener('mouseover', () => {
+            const projection = overlayView.getProjection();
+            if (!projection) return;
+            const point = projection.fromLatLngToContainerPixel(position);
+            let infoHtml = "";
+
+            if (loc.host) {
+              infoHtml += `<div style="color: ${color}; font-weight: bold; border-bottom: 2px solid ${color}; margin-bottom: 4px;">HOST</div>`;
+            }
+
+            infoHtml += `
+              <strong>${escapeHtml(loc.name)}</strong><br>
+              ${escapeHtml(loc.address)}<br>
+              <em>${escapeHtml(loc.group)}</em>
+            `;
+
+            showInfoBox(infoBox, point, infoHtml);
+          });
+
+          marker.addListener('mouseout', () => {
+            hideInfoBox(infoBox);
+          });
+        });
+
+        addLegend(map);
+      });
+    }
+
+    function convexHull(points) {
+      if (points.length < 3) return points.map(p => ({ lat: p.lat(), lng: p.lng() }));
+
+      const sorted = points
+        .map(p => ({ lat: p.lat(), lng: p.lng() }))
+        .sort((a, b) => a.lng - b.lng || a.lat - b.lat);
+
+      const cross = (o, a, b) => (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
+
+      const lower = [];
+      for (const p of sorted) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0)
+          lower.pop();
+        lower.push(p);
+      }
+
+      const upper = [];
+      for (let i = sorted.length - 1; i >= 0; i--) {
+        const p = sorted[i];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0)
+          upper.pop();
+        upper.push(p);
+      }
+
+      upper.pop();
+      lower.pop();
+      return lower.concat(upper);
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function createInfoBox() {
+      const box = document.createElement('div');
+      box.className = 'info-box';
+      document.body.appendChild(box);
+      return box;
+    }
+
+    function showInfoBox(box, point, html) {
+      box.innerHTML = html;
+      box.style.left = `${point.x}px`;
+      box.style.top = `${point.y - 30}px`;
+      box.classList.add('visible');
+    }
+
+    function hideInfoBox(box) {
+      box.classList.remove('visible');
+    }
+
+    function addLegend(map) {
+      const legend = document.createElement("div");
+      legend.style.background = "#fff";
+      legend.style.padding = "10px";
+      legend.style.margin = "10px";
+      legend.style.border = "1px solid #ccc";
+      legend.style.borderRadius = "8px";
+      legend.style.fontSize = "14px";
+      legend.style.boxShadow = "0 2px 4px rgba(0,0,0,0.2)";
+      legend.innerHTML = "<strong>Legend</strong><br>";
+
+      for (const [name, style] of Object.entries(groupStyles)) {
+        legend.innerHTML += `
+          <div style="margin: 4px 0;">
+            <svg width="20" height="20" viewBox="0 0 20 20">
+              <circle cx="10" cy="10" r="8" fill="${style.color}" stroke="#333" stroke-width="2"/>
+            </svg> ${name}
+          </div>
+        `;
+      }
+
+      map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
+    }
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=<?= apiKey ?>&callback=initMap" async defer></script>
+</body>
+</html>
